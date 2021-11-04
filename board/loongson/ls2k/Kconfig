@@ -1,0 +1,26 @@
+if TARGET_LS2K
+
+config SYS_BOARD
+	default "ls2k"
+
+config SYS_VENDOR
+	default "loongson"
+
+config SYS_CONFIG_NAME
+	default "ls2k"
+
+config SYS_TEXT_BASE
+	default 0xbe000000 if 32BIT
+	default 0xffffffffbe000000 if 64BIT
+
+config SYS_DCACHE_LINE_SIZE
+	default 64
+
+config SYS_ICACHE_SIZE
+	default 65536
+
+config SYS_ICACHE_LINE_SIZE
+	default 64
+
+
+endif

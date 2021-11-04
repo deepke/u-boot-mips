@@ -1,0 +1,3 @@
+#define LS2H_BOOTCFG_ADDR           0x900000001fd00210
+#define LS2H_BOOTCFG_OFFSET         16
+#define LS2H_DDR_PLL_MODE_OFFSET    9

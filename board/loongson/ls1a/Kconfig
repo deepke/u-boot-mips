@@ -1,0 +1,37 @@
+if TARGET_LS1A
+
+config SYS_BOARD
+	default "ls1a"
+
+config SYS_VENDOR
+	default "loongson"
+
+config SYS_CONFIG_NAME
+	default "ls1a"
+
+config SYS_TEXT_BASE
+	default 0xbfc00000 if 32BIT
+
+config SYS_DCACHE_LINE_SIZE
+	default 0
+
+config SYS_DCACHE_SIZE
+	default 0
+
+config SYS_ICACHE_LINE_SIZE
+	default 0
+
+config SYS_ICACHE_SIZE
+	default 0
+
+config  CPU_LOONGSON1A
+	bool
+	default y
+
+config VIDEO_16BPP
+	bool
+	default y
+
+
+
+endif

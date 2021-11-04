@@ -1,0 +1,1038 @@
+/** \file
+ * This is the network dependent layer to handle network related functionality.
+ * This file is tightly coupled to neworking frame work of linux 2.6.xx kernel.
+ * The functionality carried out in this file should be treated as an example only
+ * if the underlying operating system is not Linux. 
+ * 
+ * \note Many of the functions other than the device specific functions
+ *  changes for operating system other than Linux 2.6.xx
+ * \internal 
+ *-----------------------------REVISION HISTORY-----------------------------------
+ * Synopsys			01/Aug/2007				Created
+ */
+
+/*
+#include <linux/config.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/init.h>
+
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
+
+
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+*/
+
+
+#include "synopGMAC_Host.h"
+#include "synopGMAC_plat.h"
+#include "synopGMAC_network_interface.h"
+#include "synopGMAC_Dev.h"
+#include "mii.h"
+#include "mii.c"
+
+//sw:	ioctl in linux 		to be fixed
+#define SIOCDEVPRIVATE	0x89f0
+#define IOCTL_READ_REGISTER  SIOCDEVPRIVATE+1
+#define IOCTL_WRITE_REGISTER SIOCDEVPRIVATE+2
+#define IOCTL_READ_IPSTRUCT  SIOCDEVPRIVATE+3
+#define IOCTL_READ_RXDESC    SIOCDEVPRIVATE+4
+#define IOCTL_READ_TXDESC    SIOCDEVPRIVATE+5
+#define IOCTL_POWER_DOWN     SIOCDEVPRIVATE+6
+
+/*
+ *  gethex(vp,p,n)
+ *      convert n hex digits from p to binary, result in vp,
+ *      rtn 1 on success
+ */
+static int gethex(u8 *vp, char *p, int n)
+{
+        u8 v;
+        int digit;
+
+        for (v = 0; n > 0; n--) {
+                if (*p == 0)
+                        return (0);
+                if (*p >= '0' && *p <= '9')
+                        digit = *p - '0';
+                else if (*p >= 'a' && *p <= 'f')
+                        digit = *p - 'a' + 10;
+                else if (*p >= 'A' && *p <= 'F')
+                        digit = *p - 'A' + 10;
+                else
+                        return (0);
+
+                v <<= 4;
+                v |= digit;
+                p++;
+        }
+        *vp = v;
+        return (1);
+}
+
+static int rtl88e1111_config_init(synopGMACdevice *gmacdev)
+{
+	int retval, err;
+	u16 data;
+
+#if 0
+	retval = synopGMAC_read_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,MII_BCM54XX_ECR,&data);
+	if (retval < 0)
+		return retval;
+
+	/* Mask interrupts globally.  */
+	data |= MII_BCM54XX_ECR_IM;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,MII_BCM54XX_ECR,data);
+	if (err < 0)
+		return err;
+#endif
+	/* Unmask events we are interested in.  */
+	/*
+	data = ~(MII_BCM54XX_INT_DUPLEX |
+		MII_BCM54XX_INT_SPEED |
+		MII_BCM54XX_INT_LINK);
+		*/
+	//data = 0x6400;
+	//data = 0x0;
+
+
+	synopGMAC_read_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x14,&data);
+	data = data | 0x82;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x14,data);
+	synopGMAC_read_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x00,&data);
+	data = data | 0x8000;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x00,data);
+#if SYNOP_PHY_LOOPBACK
+	synopGMAC_read_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x14,&data);
+	data = data | 0x70;
+	data = data & 0xffdf;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x14,data);
+	data = 0x8000;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x00,data);
+	data = 0x5140;
+	err = synopGMAC_write_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,0x00,data);
+#endif
+	if (err < 0)
+		return err;
+	return 0;
+}
+
+int init_phy(synopGMACdevice *gmacdev)
+{
+	u16 data;
+	
+	synopGMAC_read_phy_reg(gmacdev->MacBase,gmacdev->PhyBase,2,&data);
+	/*set 88e1111 clock phase delay*/
+	if(data == 0x141)
+	 rtl88e1111_config_init(gmacdev);
+		return 0;
+}
+
+
+static int mdio_read(synopGMACPciNetworkAdapter *adapter, int addr, int reg)
+{
+	synopGMACdevice * gmacdev;
+	u16 data;
+	gmacdev = adapter->synopGMACdev;
+	
+	synopGMAC_read_phy_reg((u32 *)gmacdev->MacBase,addr,reg, &data);
+	return data;
+}
+
+static void mdio_write(synopGMACPciNetworkAdapter *adapter, int addr, int reg, int data)
+{
+	synopGMACdevice * gmacdev;
+	gmacdev = adapter->synopGMACdev;
+	synopGMAC_write_phy_reg((u32 *)gmacdev->MacBase,addr,reg,data);
+}
+
+/**
+  * This sets up the transmit Descriptor queue in ring or chain mode.
+  * This function is tightly coupled to the platform and operating system
+  * Device is interested only after the descriptors are setup. Therefore this function
+  * is not included in the device driver API. This function should be treated as an
+  * example code to design the descriptor structures for ring mode or chain mode.
+  * This function depends on the pcidev structure for allocation consistent dma-able memory in case of linux.
+  * This limitation is due to the fact that linux uses pci structure to allocate a dmable memory
+  *     - Allocates the memory for the descriptors.
+  *     - Initialize the Busy and Next descriptors indices to 0(Indicating first descriptor).
+  *     - Initialize the Busy and Next descriptors to first descriptor address.
+  *     - Initialize the last descriptor with the endof ring in case of ring mode.
+  *     - Initialize the descriptors in chain mode.
+  * @param[in] pointer to synopGMACdevice.
+  * @param[in] pointer to pci_device structure.
+  * @param[in] number of descriptor expected in tx descriptor queue.
+  * @param[in] whether descriptors to be created in RING mode or CHAIN mode.
+  * \return 0 upon success. Error code upon failure.
+  * \note This function fails if allocation fails for required number of descriptors in Ring mode, but in chain mode
+  *  function returns -ESYNOPGMACNOMEM in the process of descriptor chain creation. once returned from this function
+  *  user should for gmacdev->TxDescCount to see how many descriptors are there in the chain. Should continue further
+  *  only if the number of descriptors in the chain meets the requirements
+  */
+s32 synopGMAC_setup_tx_desc_queue(synopGMACdevice * gmacdev,u32 no_of_desc, u32 desc_mode)
+{
+        s32 i;
+        DmaDesc * bf1;
+
+        DmaDesc *first_desc = NULL;
+        //DmaDesc *second_desc = NULL;
+        dma_addr_t dma_addr;
+        gmacdev->TxDescCount = 0;
+
+        TR("Total size of memory required for Tx Descriptors in Ring Mode = 0x%08x\n",((sizeof(DmaDesc) * no_of_desc)));
+        first_desc = plat_alloc_consistent_dmaable_memory (gmacdev, sizeof(DmaDesc) * no_of_desc,&dma_addr);
+        if(first_desc == NULL){
+                TR("Error in Tx Descriptors memory allocation\n");
+                return -ESYNOPGMACNOMEM;
+        }
+
+        gmacdev->TxDescCount = no_of_desc;
+        gmacdev->TxDesc      = first_desc;
+        gmacdev->TxDescDma  = dma_addr;
+
+        TR("\n===Tx first_desc: %x\n",gmacdev->TxDesc);
+
+
+        for(i =0; i < gmacdev -> TxDescCount; i++){
+                synopGMAC_tx_desc_init_ring(gmacdev->TxDesc + i, i == gmacdev->TxDescCount-1);
+#if SYNOP_TOP_DEBUG
+                printf("\n%02d %08x \n",i,(unsigned int)(gmacdev->TxDesc + i));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i))->status);
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->length));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->buffer1));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->buffer2));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->data1));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->data2));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->dummy1));
+                printf("%08x ",(unsigned int)((gmacdev->TxDesc + i)->dummy2));
+                //              printf("%02d %08x \n",i,(unsigned int)(gmacdev->TxDesc + i));
+                //              printf("%02d %08x \n",i,(unsigned int)(gmacdev->TxDesc + i));
+#endif
+        }
+
+        gmacdev->TxNext = 0;
+        gmacdev->TxBusy = 0;
+        gmacdev->TxNextDesc = gmacdev->TxDesc;
+        gmacdev->TxBusyDesc = gmacdev->TxDesc;
+        gmacdev->BusyTxDesc  = 0;
+
+        return -ESYNOPGMACNOERR;
+}
+
+/**
+  * This sets up the receive Descriptor queue in ring or chain mode.
+  * This function is tightly coupled to the platform and operating system
+  * Device is interested only after the descriptors are setup. Therefore this function
+  * is not included in the device driver API. This function should be treated as an
+  * example code to design the descriptor structures in ring mode or chain mode.
+  * This function depends on the pcidev structure for allocation of consistent dma-able memory in case of linux.
+  * This limitation is due to the fact that linux uses pci structure to allocate a dmable memory
+  *     - Allocates the memory for the descriptors.
+  *     - Initialize the Busy and Next descriptors indices to 0(Indicating first descriptor).
+  *     - Initialize the Busy and Next descriptors to first descriptor address.
+  *     - Initialize the last descriptor with the endof ring in case of ring mode.
+  *     - Initialize the descriptors in chain mode.
+  * @param[in] pointer to synopGMACdevice.
+  * @param[in] pointer to pci_device structure.
+  * @param[in] number of descriptor expected in rx descriptor queue.
+  * @param[in] whether descriptors to be created in RING mode or CHAIN mode.
+  * \return 0 upon success. Error code upon failure.
+  * \note This function fails if allocation fails for required number of descriptors in Ring mode, but in chain mode
+  *  function returns -ESYNOPGMACNOMEM in the process of descriptor chain creation. once returned from this function
+  *  user should for gmacdev->RxDescCount to see how many descriptors are there in the chain. Should continue further
+  *  only if the number of descriptors in the chain meets the requirements
+  */
+s32 synopGMAC_setup_rx_desc_queue(synopGMACdevice * gmacdev,u32 no_of_desc, u32 desc_mode)
+{
+        s32 i;
+        DmaDesc * bf1;
+        DmaDesc *first_desc = NULL;
+        //DmaDesc *second_desc = NULL;
+        dma_addr_t dma_addr;
+        gmacdev->RxDescCount = 0;
+
+        TR("total size of memory required for Rx Descriptors in Ring Mode = 0x%08x\n",((sizeof(DmaDesc) * no_of_desc)));
+        first_desc = plat_alloc_consistent_dmaable_memory (gmacdev, sizeof(DmaDesc) * no_of_desc, &dma_addr);
+        if(first_desc == NULL){
+                TR("Error in Rx Descriptor Memory allocation in Ring mode\n");
+                return -ESYNOPGMACNOMEM;
+        }
+
+
+        gmacdev->RxDescCount = no_of_desc;
+        gmacdev->RxDesc      = first_desc;
+        gmacdev->RxDescDma   = dma_addr;
+
+
+        for(i =0; i < gmacdev -> RxDescCount; i++){
+                synopGMAC_rx_desc_init_ring(gmacdev->RxDesc + i, i == gmacdev->RxDescCount-1);
+#if SYNOP_TOP_DEBUG
+                TR("%02d %08x \n",i, (unsigned int)(gmacdev->RxDesc + i));
+#endif
+        }
+
+        gmacdev->RxNext = 0;
+        gmacdev->RxBusy = 0;
+        gmacdev->RxNextDesc = gmacdev->RxDesc;
+        gmacdev->RxBusyDesc = gmacdev->RxDesc;
+
+        gmacdev->BusyRxDesc   = 0;
+
+        return -ESYNOPGMACNOERR;
+}
+
+s32 synopGMAC_check_phy_init (struct synopGMACNetworkAdapter *adapter)
+{
+struct ethtool_cmd cmd;
+synopGMACdevice            *gmacdev = adapter->synopGMACdev;
+
+
+
+        if(!mii_link_ok(&adapter->mii))
+        {
+                gmacdev->DuplexMode = FULLDUPLEX;
+                gmacdev->Speed      =   SPEED100;
+
+                return 0;
+        }
+        else
+
+        {
+                mii_ethtool_gset(&adapter->mii, &cmd);
+
+        gmacdev->DuplexMode = (cmd.duplex == DUPLEX_FULL)  ? FULLDUPLEX: HALFDUPLEX ;
+        if(cmd.speed == SPEED_1000)
+                gmacdev->Speed      =   SPEED1000;
+        else if(cmd.speed == SPEED_100)
+                gmacdev->Speed      =   SPEED100;
+        else
+                gmacdev->Speed      =   SPEED10;
+
+        }
+
+        return gmacdev->Speed|(gmacdev->DuplexMode<<4);
+}
+
+
+/**
+ * Function used when the interface is opened for use.
+ * We register synopGMAC_linux_open function to linux open(). Basically this
+ * function prepares the the device for operation . This function is called whenever ifconfig (in Linux)
+ * activates the device (for example "ifconfig eth0 up"). This function registers
+ * system resources needed
+ *      - Attaches device to device specific structure
+ *      - Programs the MDC clock for PHY configuration
+ *      - Check and initialize the PHY interface
+ *      - ISR registration
+ *      - Setup and initialize Tx and Rx descriptors
+ *      - Initialize MAC and DMA
+ *      - Allocate Memory for RX descriptors (The should be DMAable)
+ *      - Initialize one second timer to detect cable plug/unplug
+ *      - Configure and Enable Interrupts
+ *      - Enable Tx and Rx
+ *      - start the Linux network queue interface
+ * @param[in] pointer to net_device structure.
+ * \return Returns 0 on success and error status upon failure.
+ * \callgraph
+ */
+unsigned long synopGMAC_linux_open(struct eth_device *dev, bd_t * bd)
+{
+        s32 status = 0;
+        s32 retval = 0;
+        int delay = 100;
+//      DmaDesc * dbgdesc;      //sw: dbg
+
+        //s32 reserve_len=2;
+        u64 dma_addr;
+        u32 skb;        //sw    we just use the name skb in pomn
+        u32 skb1;
+	u64 synopGMACMappedAddr = dev->iobase;
+        struct synopGMACNetworkAdapter *adapter = dev->priv;
+        synopGMACdevice * gmacdev;
+        TR0("%s called \n",__FUNCTION__);
+        gmacdev = (struct synopGMACdevice *)adapter->synopGMACdev;
+
+        /*Now platform dependent initialization.*/
+
+        /*Lets reset the IP*/
+        synopGMAC_reset(gmacdev);
+
+        /*Attach the device to MAC struct This will configure all the required base addresses
+          such as Mac base, configuration base, phy base address(out of 32 possible phys )*/
+        //      synopGMAC_attach(synopGMACadapter->synopGMACdev,(u32) synopGMACMappedAddr + MACBASE,(u32) synopGMACMappedAddr + DMABASE, DEFAULT_PHY_BASE);
+        synopGMAC_attach(adapter->synopGMACdev,(u64) synopGMACMappedAddr + MACBASE,(u64) synopGMACMappedAddr + DMABASE, DEFAULT_PHY_BASE, dev->enetaddr);
+        synopGMAC_set_mac_addr(gmacdev,GmacAddr0High,GmacAddr0Low, dev->enetaddr);
+
+        /*Lets read the version of ip in to device structure*/
+        synopGMAC_read_version(gmacdev);
+
+        synopGMAC_get_mac_addr(adapter->synopGMACdev,GmacAddr0High,GmacAddr0Low, dev->enetaddr);
+
+        /*Now set the broadcast address*/
+/*      sw
+        for(ijk = 0; ijk <6; ijk++){
+                netdev->broadcast[ijk] = 0xff;
+        }
+
+        for(ijk = 0; ijk <6; ijk++){
+        TR("netdev->dev_addr[%d] = %02x and netdev->broadcast[%d] = %02x\n",ijk,netdev->dev_addr[ijk],ijk,netdev->broadcast[ijk]);
+        }
+*/
+
+        /*Check for Phy initialization*/
+        synopGMAC_set_mdc_clk_div(gmacdev,GmiiCsrClk3);
+        gmacdev->ClockDivMdc = synopGMAC_get_mdc_clk_div(gmacdev);
+
+//      dumpphyreg(synopGMACadapter->synopGMACdev);
+
+//      set_lpmode(gmacdev);
+//      set_phyled(gmacdev);
+
+
+#if SYNOP_TOP_DEBUG
+        printf("check phy init status = 0x%x\n",status);
+#endif
+
+        /*Set up the tx and rx descriptor queue/ring*/
+//sw
+        synopGMAC_setup_tx_desc_queue(gmacdev,TRANSMIT_DESC_SIZE, RINGMODE);
+        synopGMAC_init_tx_desc_base(gmacdev);   //Program the transmit descriptor base address in to DmaTxBase addr
+
+#if SYNOP_TOP_DEBUG
+        //dumpreg(regbase);
+#endif
+
+        synopGMAC_setup_rx_desc_queue(gmacdev,RECEIVE_DESC_SIZE, RINGMODE);
+        synopGMAC_init_rx_desc_base(gmacdev);   //Program the transmit descriptor base address in to DmaTxBase addr
+
+
+
+#if SYNOP_TOP_DEBUG
+        //dumpphyreg(regbase);
+#endif
+
+
+
+
+#ifdef ENH_DESC_8W
+        synopGMAC_dma_bus_mode_init(gmacdev, DmaBurstLength32 | DmaDescriptorSkip2 | DmaDescriptor8Words ); //pbl32 incr with rxthreshold 128 and Desc is 8 Words
+#else
+        synopGMAC_dma_bus_mode_init(gmacdev, DmaBurstLength4 | DmaDescriptorSkip1 );                      //pbl4 incr with rxthreshold 128
+#endif
+
+        synopGMAC_dma_control_init(gmacdev,DmaStoreAndForward |DmaTxSecondFrame|DmaRxThreshCtrl128 );
+
+//sw: dbg
+/*
+        gmacdev->DuplexMode = FULLDUPLEX ;
+        gmacdev->Speed      =   SPEED1000;
+*/
+
+
+        /*Initialize the mac interface*/
+        synopGMAC_check_phy_init(adapter);
+        synopGMAC_mac_init(gmacdev);
+//      dumpreg(regbase);
+
+
+        synopGMAC_pause_control(gmacdev); // This enables the pause control in Full duplex mode of operation
+
+        do{
+                skb = (u32)plat_alloc_memory(RX_BUF_SIZE);              //should skb aligned here?
+                if(skb == NULL){
+                        TR0("ERROR in skb buffer allocation\n");
+                        break;
+//                      return -ESYNOPGMACNOMEM;
+                }
+
+                dma_addr = plat_dma_map_single(gmacdev,skb,RX_BUF_SIZE);
+
+
+                status = synopGMAC_set_rx_qptr(gmacdev,dma_addr,RX_BUF_SIZE, (u32)skb,0,0,0);
+                if(status < 0)
+                {
+                        plat_free_memory((void *)skb);
+                }
+        }while(status >= 0 && status < RECEIVE_DESC_SIZE-1);
+
+#if SYNOP_TOP_DEBUG
+        dumpdesc(gmacdev);
+#endif
+
+        synopGMAC_clear_interrupt(gmacdev);
+        /*
+        Disable the interrupts generated by MMC and IPC counters.
+        If these are not disabled ISR should be modified accordingly to handle these interrupts.
+        */
+        synopGMAC_disable_mmc_tx_interrupt(gmacdev, 0xFFFFFFFF);
+        synopGMAC_disable_mmc_rx_interrupt(gmacdev, 0xFFFFFFFF);
+        synopGMAC_disable_mmc_ipc_rx_interrupt(gmacdev, 0xFFFFFFFF);
+
+//sw    no interrupts in pmon
+//      synopGMAC_enable_interrupt(gmacdev,DmaIntEnable);
+        synopGMAC_disable_interrupt_all(gmacdev);
+
+
+//      dumpreg(regbase);
+
+        synopGMAC_enable_dma_rx(gmacdev);
+        synopGMAC_enable_dma_tx(gmacdev);
+#if SYNOP_TOP_DEBUG
+        dumpreg(regbase);
+#endif
+
+//      synopGMAC_rx_enable(gmacdev);
+
+#if SYNOP_TOP_DEBUG
+        //dumpphyreg();
+#endif
+
+#if SYNOP_PHY_LOOPBACK
+{
+                gmacdev->LinkState = LINKUP;
+                gmacdev->DuplexMode = FULLDUPLEX;
+                gmacdev->Speed      =   SPEED1000;
+}
+#endif
+        plat_delay(DEFAULT_LOOP_VARIABLE);
+        synopGMAC_check_phy_init(adapter);
+        synopGMAC_mac_init(gmacdev);
+
+ //               PInetdev->sc_ih = pci_intr_establish(0, 0, IPL_NET, synopGMAC_intr_handler, adapter, 0);
+   //             TR("register poll interrupt: gmac 0\n");
+        return retval;
+
+}
+
+
+/**
+ * Function used when the interface is closed.
+ *
+ * This function is registered to linux stop() function. This function is
+ * called whenever ifconfig (in Linux) closes the device (for example "ifconfig eth0 down").
+ * This releases all the system resources allocated during open call.
+ * system resources int needs
+ *      - Disable the device interrupts
+ *      - Stop the receiver and get back all the rx descriptors from the DMA
+ *      - Stop the transmitter and get back all the tx descriptors from the DMA
+ *      - Stop the Linux network queue interface
+ *      - Free the irq (ISR registered is removed from the kernel)
+ *      - Release the TX and RX descripor memory
+ *      - De-initialize one second timer rgistered for cable plug/unplug tracking
+ * @param[in] pointer to net_device structure.
+ * \return Returns 0 on success and error status upon failure.
+ * \callgraph
+ */
+s32 synopGMAC_linux_close(struct eth_device *dev)
+{
+
+        struct synopGMACNetworkAdapter *adapter;
+        struct synopGMACdevice * gmacdev;
+
+        TR0("%s\n",__FUNCTION__);
+        adapter = (struct synopGMACNetworkAdapter *) dev->priv;
+        if(adapter == NULL){
+                TR0("adapter is null\n");
+                return -1;
+        }
+
+        gmacdev = (struct synopGMACdevice *) adapter->synopGMACdev;
+        if(gmacdev == NULL){
+                TR0("gmacdev is null\n");
+                return -1;
+        }
+
+        synopGMAC_disable_interrupt_all(gmacdev);
+        TR("the synopGMAC interrupt has been disabled\n");
+
+        synopGMAC_disable_dma_rx(gmacdev);
+        synopGMAC_take_desc_ownership_rx(gmacdev);
+        TR("the synopGMAC Reception has been disabled\n");
+
+
+        synopGMAC_disable_dma_tx(gmacdev);
+        synopGMAC_take_desc_ownership_tx(gmacdev);
+
+        TR("the synopGMAC Transmission has been disabled\n");
+/*        netif_stop_queue(netdev);
+
+        free_irq(pcidev->irq, netdev);
+        TR("the synopGMAC interrupt handler has been removed\n");
+
+        TR("Now calling synopGMAC_giveup_rx_desc_queue \n");
+        synopGMAC_giveup_rx_desc_queue(gmacdev, pcidev, RINGMODE);
+//      synopGMAC_giveup_rx_desc_queue(gmacdev, pcidev, CHAINMODE);
+        TR("Now calling synopGMAC_giveup_tx_desc_queue \n");
+        synopGMAC_giveup_tx_desc_queue(gmacdev, pcidev, RINGMODE);
+//      synopGMAC_giveup_tx_desc_queue(gmacdev, pcidev, CHAINMODE);
+
+        TR("Freeing the cable unplug timer\n");
+        del_timer(&synopGMAC_cable_unplug_timer);
+*/
+        return -ESYNOPGMACNOERR;
+
+      TR("%s called \n",__FUNCTION__);
+}
+
+/**
+ * Function to transmit a given packet on the wire.
+ * Whenever Linux Kernel has a packet ready to be transmitted, this function is called.
+ * The function prepares a packet and prepares the descriptor and
+ * enables/resumes the transmission.
+ * @param[in] pointer to sk_buff structure.
+ * @param[in] pointer to net_device structure.
+ * \return Returns 0 on success and Error code on failure.
+ * \note structure sk_buff is used to hold packet in Linux networking stacks.
+ */
+
+//s32 synopGMAC_linux_xmit_frames(struct sk_buff *skb, struct net_device *netdev)
+s32 synopGMAC_linux_xmit_frames(struct synopGMACNetworkAdapter * tp, u32 length)
+{
+        s32 status = 0;
+        u64 dma_addr;
+        u32 offload_needed = 0;
+        u32 skb;
+        u32 index;
+        DmaDesc * dpr;
+        int len = length;
+        int i;
+        char * ptr;
+
+        //u32 flags;
+        struct synopGMACNetworkAdapter *adapter = tp;
+        synopGMACdevice * gmacdev;
+//      struct pci_dev * pcidev;
+#if SYNOP_TX_DEBUG
+        TR("%s called \n",__FUNCTION__);
+        printf("===xmit  yeh!\n");
+#endif
+        if(adapter == NULL)
+                return -1;
+
+        gmacdev = (synopGMACdevice *) adapter->synopGMACdev;
+        if(gmacdev == NULL)
+                return -1;
+#if SYNOP_TX_DEBUG
+        printf("xmit: TxBusy = %d\tTxNext = %d\n",gmacdev->TxBusy,gmacdev->TxNext);
+#endif
+
+                        if(!synopGMAC_is_desc_owned_by_dma(gmacdev->TxNextDesc))
+                        {
+
+                                skb = (u32)plat_alloc_memory(TX_BUF_SIZE);
+                                if(skb == 0)
+                                {
+#if SYNOP_TX_DEBUG
+                                        printf("===error in alloc bf1\n");
+#endif
+                                        return -1;
+                                }
+
+
+                                /*Now we have skb ready and OS invoked this function. Lets make our DMA know about this*/
+                                dma_addr = plat_dma_map_single(gmacdev,skb,len);
+
+                                /*
+                                   if(len < 64)
+                                   len = 64;
+                                 */
+
+#if SYNOP_TX_DEBUG
+                                printf("==tx pkg len: %d",len);
+#endif
+#if SYNOP_TX_DEBUG
+                                for(i = 0;i < len;i++)
+                                {
+                                        ptr = (u32)bf1;
+                                        printf(" %02x",*(ptr+i));
+                                }
+                                printf("\n");
+#endif
+
+
+
+                                //              status = synopGMAC_set_tx_qptr(gmacdev, dma_addr, TX_BUF_SIZE, bf1,0,0,0,offload_needed);
+                                status = synopGMAC_set_tx_qptr(gmacdev, dma_addr, len, skb,0,0,0,offload_needed,&index,dpr);
+#if SYNOP_TX_DEBUG
+                                printf("status = %d \n",status);
+#endif
+
+
+                                //              dumpdesc(gmacdev);
+                                if(status < 0){
+#if SYNOP_TX_DEBUG
+                                        TR("%s No More Free Tx Descriptors\n",__FUNCTION__);
+#endif
+                                        //                      dev_kfree_skb (skb); //with this, system used to freeze.. ??
+                                        return -16;
+                                }
+                        }
+#if SYNOP_TX_DEBUG
+                        else
+                                printf("===%x: next txDesc belongs to DMA don't set it\n",gmacdev->TxNextDesc);
+#endif
+
+        /*Now force the DMA to start transmission*/
+#if SYNOP_TX_DEBUG
+                {
+                        u32 data;
+                        data = synopGMACReadReg(gmacdev->DmaBase, 0x48);
+                        printf("TX DMA DESC ADDR = 0x%x\n",data);
+                }
+#endif
+                /*
+        synopGMAC_tx_enable(gmacdev);
+        synopGMAC_enable_dma_tx(gmacdev);
+        synopGMAC_resume_dma_tx(gmacdev);
+        */
+        synopGMAC_resume_dma_tx(gmacdev);
+        //printf("%02d %08x %08x %08x %08x %08x %08x %08x\n",index,(u32)dpr,dpr->status,dpr->length,dpr->buffer1,dpr->buffer2,dpr->data1,dpr->data2);
+        return -ESYNOPGMACNOERR;
+}
+
+
+/**
+ * Function to handle housekeeping after a packet is transmitted over the wire.
+ * After the transmission of a packet DMA generates corresponding interrupt
+ * (if it is enabled). It takes care of returning the sk_buff to the linux
+ * kernel, updating the networking statistics and tracking the descriptors.
+ * @param[in] pointer to net_device structure.
+ * \return void.
+ * \note This function runs in interrupt context
+ */
+void synop_handle_transmit_over(struct synopGMACNetworkAdapter * tp)
+{
+        struct  synopGMACNetworkAdapter *adapter;
+        synopGMACdevice * gmacdev;
+//      struct pci_dev *pcidev;
+        s32 desc_index;
+        u32 data1, data2;
+        u32 status;
+        u32 length1, length2;
+        u64 dma_addr1, dma_addr2;
+#ifdef ENH_DESC_8W
+        u32 ext_status;
+        u16 time_stamp_higher;
+        u32 time_stamp_high;
+        u32 time_stamp_low;
+#endif
+        adapter = tp;
+        if(adapter == NULL){
+#if SYNOP_TX_DEBUG
+                TR("Unknown Device\n");
+#endif
+                return;
+        }
+
+        gmacdev = adapter->synopGMACdev;
+        if(gmacdev == NULL){
+#if SYNOP_TX_DEBUG
+                TR("GMAC device structure is missing\n");
+#endif
+                return;
+        }
+
+        /*Handle the transmit Descriptors*/
+        do {
+#ifdef ENH_DESC_8W
+        desc_index = synopGMAC_get_tx_qptr(gmacdev, &status, &dma_addr1, &length1, &data1, &dma_addr2, &length2, &data2,&ext_status,&time_stamp_high,
+&time_stamp_low);
+        synopGMAC_TS_read_timestamp_higher_val(gmacdev, &time_stamp_higher);
+#else
+        desc_index = synopGMAC_get_tx_qptr(gmacdev, &status, &dma_addr1, &length1, &data1, &dma_addr2, &length2, &data2);
+#if SYNOP_TX_DEBUG
+        printf("===handle transmit_over: %d\n",desc_index);
+#endif
+#endif
+        //desc_index = synopGMAC_get_tx_qptr(gmacdev, &status, &dma_addr, &length, &data1);
+                if(desc_index >= 0 && data1 != 0){
+#if SYNOP_TX_DEBUG
+                        printf("Finished Transmit at Tx Descriptor %d for skb 0x%08x and buffer = %08x whose status is %08x \n", desc_index,data1,dma
+_addr1,status);
+#endif
+                        #ifdef  IPC_OFFLOAD
+                        if(synopGMAC_is_tx_ipv4header_checksum_error(gmacdev, status)){
+#if SYNOP_TX_DEBUG
+                        TR("Harware Failed to Insert IPV4 Header Checksum\n");
+#else
+                        ;
+#endif
+                        }
+                        if(synopGMAC_is_tx_payload_checksum_error(gmacdev, status)){
+#if SYNOP_TX_DEBUG
+                        TR("Harware Failed to Insert Payload Checksum\n");
+#else
+                        ;
+#endif
+                        }
+                        #endif
+
+                        plat_free_memory((void *)(data1));      //sw:   data1 = buffer1
+
+                        if(synopGMAC_is_desc_valid(status)){
+                                adapter->synopGMACNetStats.tx_bytes += length1;
+                                adapter->synopGMACNetStats.tx_packets++;
+                        }
+                        else {
+#if SYNOP_TX_DEBUG
+                                TR("Error in Status %08x\n",status);
+#endif
+                                adapter->synopGMACNetStats.tx_errors++;
+                                adapter->synopGMACNetStats.tx_aborted_errors += synopGMAC_is_tx_aborted(status);
+                                adapter->synopGMACNetStats.tx_carrier_errors += synopGMAC_is_tx_carrier_error(status);
+                        }
+                }       adapter->synopGMACNetStats.collisions += synopGMAC_get_tx_collision_count(status);
+        } while(desc_index >= 0);
+//      netif_wake_queue(netdev);
+}
+
+static int gmac_send(struct eth_device *dev, volatile void *packet, int length)
+{
+        struct synopGMACNetworkAdapter *adapter = dev->priv;
+        synopGMACdevice * gmacdev;
+        TR0("%s called \n",__FUNCTION__);
+        gmacdev = (struct synopGMACdevice *)adapter->synopGMACdev;
+
+	s32 i;
+	i = synopGMAC_linux_xmit_frames(adapter, length);
+	if(!i){
+		printf("error: synopGMAC_linux_xmit_frames\n");
+		return -1;
+		}
+	synop_handle_transmit_over(adapter);
+	
+	return 0;
+}
+
+/**
+ * Function to Receive a packet from the interface.
+ * After Receiving a packet, DMA transfers the received packet to the system memory
+ * and generates corresponding interrupt (if it is enabled). This function prepares
+ * the sk_buff for received packet after removing the ethernet CRC, and hands it over
+ * to linux networking stack.
+ *      - Updataes the networking interface statistics
+ *      - Keeps track of the rx descriptors
+ * @param[in] pointer to net_device structure.
+ * \return void.
+ * \note This function runs in interrupt context.
+ */
+
+void synop_handle_received_data(struct synopGMACNetworkAdapter* tp)
+{
+        struct synopGMACNetworkAdapter *adapter;
+        synopGMACdevice * gmacdev;
+        s32 desc_index;
+        int i;
+        char * ptr;
+        u32 bf1;
+        u32 data1;
+        u32 data2;
+        u32 len;
+        u32 status;
+        u64 dma_addr1;
+        u64 dma_addr2;
+
+#if SYNOP_RX_DEBUG
+        TR("%s\n",__FUNCTION__);
+#endif
+
+        adapter = tp;
+        if(adapter == NULL){
+#if SYNOP_RX_DEBUG
+                TR("Unknown Device\n");
+#endif
+                return;
+        }
+
+        gmacdev = adapter->synopGMACdev;
+        if(gmacdev == NULL){
+#if SYNOP_RX_DEBUG
+                TR("GMAC device structure is missing\n");
+#endif
+                return;
+        }
+
+        //dumpdesc(gmacdev);
+
+        /*Handle the Receive Descriptors*/
+        do{
+                desc_index = synopGMAC_get_rx_qptr(gmacdev, &status,&dma_addr1,NULL, &data1,&dma_addr2,NULL,&data2);
+
+                if(desc_index >= 0 && data1 != 0){
+#if SYNOP_RX_DEBUG
+                        printf("Received Data at Rx Descriptor %d for skb 0x%08x whose status is %08x\n",desc_index,dma_addr1,status);
+#endif
+
+                        if(synopGMAC_is_rx_desc_valid(status)||SYNOP_PHY_LOOPBACK){
+
+                                dma_addr1 =  plat_dma_map_single(gmacdev,data1,RX_BUF_SIZE);
+                                len =  synopGMAC_get_rx_desc_frame_length(status) - 4; //Not interested in Ethernet CRC bytes
+
+#if SYNOP_RX_DEBUG
+                                printf("==get pkg len: %d",len);
+#endif
+
+#if SYNOP_RX_DEBUG
+                                {
+                                        int k;
+                                        char temp;
+                                        for (k=0;k<len;k++)
+                                        {
+                                                temp = (char)(*(char *)(data1 + k));
+                                                printf("%02x  ",temp);
+                                        }
+                                        printf("\n");
+                                }
+
+#endif
+
+                                adapter->synopGMACNetStats.rx_packets++;
+                                adapter->synopGMACNetStats.rx_bytes += len;
+                        }
+                        else{
+                                adapter->synopGMACNetStats.rx_errors++;
+                                adapter->synopGMACNetStats.collisions       += synopGMAC_is_rx_frame_collision(status);
+                                adapter->synopGMACNetStats.rx_crc_errors    += synopGMAC_is_rx_crc(status);
+                                adapter->synopGMACNetStats.rx_frame_errors  += synopGMAC_is_frame_dribbling_errors(status);
+                                adapter->synopGMACNetStats.rx_length_errors += synopGMAC_is_rx_frame_length_errors(status);
+                        }
+
+                        desc_index = synopGMAC_set_rx_qptr(gmacdev,dma_addr1, RX_BUF_SIZE, (u32)data1,0,0,0);
+
+                        if(desc_index < 0){
+#if SYNOP_RX_DEBUG
+                                TR("Cannot set Rx Descriptor for data1 %08x\n",(u32)data1);
+#endif
+                                plat_free_memory((void *)data1);
+                        }
+
+                }
+
+        }while(desc_index >= 0);
+}
+
+static int gmac_recv(struct eth_device *dev)
+{
+        struct synopGMACNetworkAdapter *adapter = dev->priv;
+        TR0("%s called \n",__FUNCTION__);
+
+        synop_handle_received_data(adapter);
+
+        return 0;
+}
+
+
+/**
+ * Function to initialize the Linux network interface.
+ * 
+ * Linux dependent Network interface is setup here. This provides 
+ * an example to handle the network dependent functionality.
+ *
+ * \return Returns 0 on success and Error code on failure.
+ */
+s32  synopGMAC_init_network_interface(char* xname,u64 synopGMACMappedAddr)
+{
+//varables added by sw
+
+	static u8 mac_addr0[6] = DEFAULT_MAC_ADDRESS;
+	static int inited = 0;
+	int i;
+	u16 data;
+	struct synopGMACNetworkAdapter * synopGMACadapter;
+	if(!inited)
+	{
+		u8 v;
+		char *s=getenv("ethaddr");
+		if(s){
+			int allz,allf;
+			u8 macaddr[6];
+
+			for(i = 0, allz = 1, allf = 1; i < 6; i++) {
+				gethex(&v, s, 2);
+				macaddr[i] = v;
+				s += 3;         /* Don't get to fancy here :-) */
+				if(v != 0) allz = 0;
+				if(v != 0xff) allf = 0;
+			} 
+			if(!allz && !allf)
+				memcpy(mac_addr0, macaddr, 6);
+		}
+		inited = 1;
+	}
+
+	
+	TR("Now Going to Call register_netdev to register the network interface for GMAC core\n");
+	synopGMACadapter = (struct synopGMACNetworkAdapter * )plat_alloc_memory(sizeof (struct synopGMACNetworkAdapter)); 
+//sw:	should i put sync_cache here?
+	memset((char *)synopGMACadapter ,0, sizeof (struct synopGMACNetworkAdapter));
+
+	synopGMACadapter->synopGMACdev    = NULL;
+	
+	/*Allocate Memory for the the GMACip structure*/
+	synopGMACadapter->synopGMACdev = (synopGMACdevice *) plat_alloc_memory(sizeof (synopGMACdevice));
+	memset((char *)synopGMACadapter->synopGMACdev ,0, sizeof (synopGMACdevice));
+	if(!synopGMACadapter->synopGMACdev){
+		TR0("Error in Memory Allocataion \n");
+	}
+
+	synopGMAC_attach(synopGMACadapter->synopGMACdev,(u64) synopGMACMappedAddr + MACBASE,(u64) synopGMACMappedAddr + DMABASE, DEFAULT_PHY_BASE,mac_addr0);
+#if SYNOP_TOP_DEBUG
+	dumpphyreg(synopGMACadapter);
+#endif
+
+	init_phy(synopGMACadapter->synopGMACdev);
+//	testphyreg(synopGMACadapter->synopGMACdev);
+	synopGMAC_reset(synopGMACadapter->synopGMACdev);
+
+	
+#if SYNOP_TOP_DEBUG
+	dumpreg(regbase);
+	dumpphyreg();
+#if SYNOP_GMAC0
+	dumpdesc(synopGMACadapter->synopGMACdev);
+#endif
+#endif
+
+	/* MII setup */
+	synopGMACadapter->mii.phy_id_mask = 0x1F;
+	synopGMACadapter->mii.reg_num_mask = 0x1F;
+	synopGMACadapter->mii.dev = synopGMACadapter;
+	synopGMACadapter->mii.mdio_read = mdio_read;
+	synopGMACadapter->mii.mdio_write = mdio_write;
+	synopGMACadapter->mii.phy_id = synopGMACadapter->synopGMACdev->PhyBase;
+	synopGMACadapter->mii.supports_gmii = mii_check_gmii_support(&synopGMACadapter->mii);
+
+struct eth_device *dev;
+        dev = malloc(sizeof(*dev));
+        if (!dev) {
+                return -1;
+        }
+        memset(dev, 0, sizeof(*dev));
+
+        dev->iobase = synopGMACMappedAddr;
+	dev->priv = synopGMACadapter;
+
+        bcopy(xname, dev->name, NAMESIZE);
+        dev->enetaddr[0] = mac_addr0[0];
+        dev->enetaddr[1] = mac_addr0[1];
+        dev->enetaddr[2] = mac_addr0[2];
+        dev->enetaddr[3] = mac_addr0[3];
+        dev->enetaddr[4] = mac_addr0[4];
+        dev->enetaddr[5] = mac_addr0[5];
+
+        dev->init = synopGMAC_linux_open;
+        dev->halt = synopGMAC_linux_close;
+        dev->send = gmac_send;
+        dev->recv = gmac_recv;
+
+        eth_register(dev);
+
+
+	return 0;
+}
+
+

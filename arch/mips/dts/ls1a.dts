@@ -1,0 +1,370 @@
+/*
+ * 2K1000 Device Tree Source for LS2K1000 boards
+ */
+
+/dts-v1/;
+/ {
+	model = "loongson,LS1B-EVP";
+	compatible = "loongson,ls1c";
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	// Since 2K1000 support > 4GiB DIMM, use 2 cell for and address size
+	memory {
+		name = "memory";
+		device_type = "memory";
+		reg =  <0 0x00200000 0 0x03e00000>;	// 7424 - 512 MiB at 4352MiB
+	};
+
+	// all soc device use 32bit address
+	aliases {
+		ethernet0 = &gmac0;
+		//ethernet1 = &gmac1;
+		spi0 = &spi0;
+	};
+
+	soc {
+		compatible = "ls,nbus", "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x10000000 0 0x10000000 0x10000000>;
+
+		/*dma-coherent;*/
+		nr_cpus_loongson = <1>;
+		cores_per_package = <1>;
+
+		icu: interrupt-controller {
+			compatible = "loongson,1c-icu";
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			reg = <0x1fd01040 0x40>;
+		};
+
+
+		/* HDA controller nodes:
+		 * If you want to use the "hda" function,enable the "hda"
+		 * controller by configure general configuration register 0.
+		 */
+
+#if 0
+		dc {
+			compatible = "loongson,ls-fb";
+			reg = <0x1c301240 0x10000
+				0x20000000 0x8000000>;
+			interrupt-parent = <&icu>;
+			interrupts = <36>;
+		};
+
+#endif
+
+		ohci {
+			compatible = "ohci-platform", "generic-ohci";
+			reg = <0x1fe08000 0x1000>;
+			interrupt-parent = <&icu>;
+			interrupts = <41>;
+			dma-mask = <0xffffffff>;
+		};
+
+		ehci {
+			compatible = "ehci-platform";
+			reg = <0x1fe00000 0x1000>;
+			interrupt-parent = <&icu>;
+			interrupts = <40>;
+			dma-mask = <0xffffffff>;
+		};
+
+		sata: ahci {
+			compatible = "snps,dwc-ahci";
+			reg = <0x1fe30000 0xffff>;
+			interrupt-parent = <&icu>;
+			interrupts = <44>;
+			dma-mask = <0x0 0xffffffff>;
+		};
+
+		gmac0: gmac0 {
+			//compatible = "snps,dwmac-3.70a", "ls,ls-gmac", "st,stm32-dwmac";
+			compatible = "loongson,ls1a-gmac";
+			reg = <0x1fe10000 0x1000>;
+			interrupt-parent = <&icu>;
+			interrupts = <42>;
+			interrupt-names = "macirq";
+			/*mac-address = [ 64 48 48 48 48 60 ]; [>mac 64:48:48:48:48:60 <]*/
+			phy-mode = "rgmii";
+			bus_id = <0x0>;
+			phy_addr = <0xffffffff>;
+			dma-mask = <0xffffffff>;
+		};
+
+#if 0
+		gmac1: gmac1 {
+			//compatible = "snps,dwmac-3.70a", "ls,ls-gmac", "st,stm32-dwmac";
+			compatible = "loongson,ls1a-gmac";
+			reg = <0x1fe20000 0x1000>;
+			interrupt-parent = <&icu>;
+			interrupts = <43>;
+			interrupt-names = "macirq";
+			/*mac-address = [ 64 48 48 48 48 60 ]; [>mac 64:48:48:48:48:60 <]*/
+			phy-mode = "rgmii";
+			bus_id = <0x1>;
+			phy_addr = <0xffffffff>;
+			dma-mask = <0xffffffff>;
+		};
+#endif
+
+#if 1
+		uart0: serial0 {
+			device_type = "serial";
+			compatible = "ns16550";
+			reg = <0x1fe40000 0x100>;
+			clock-frequency = <50000000>;
+			interrupt-parent = <&icu>;
+			interrupts = <10>;
+		};
+
+		serial1 {
+			device_type = "serial";
+			compatible = "ns16550";
+			reg = <0x1fe44000 0x100>;
+			clock-frequency = <50000000>;
+			interrupt-parent = <&icu>;
+			interrupts = <11>;
+		};
+
+		serial2 {
+			device_type = "serial";
+			compatible = "ns16550";
+			reg = <0x1fe48000 0x100>;
+			clock-frequency = <50000000>;
+			interrupt-parent = <&icu>;
+			interrupts = <12>;
+		};
+
+		serial3 {
+			device_type = "serial";
+			compatible = "ns16550";
+			reg = <0x1fe4c000 0x100>;
+			clock-frequency = <50000000>;
+			interrupt-parent = <&icu>;
+			interrupts = <13>;
+		};
+#endif
+
+
+		i2c0 {
+			compatible = "loongson,ls-i2c";
+			reg = <0x1fe58000 0x8>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		i2c1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			compatible = "loongson,ls-i2c";
+			reg = <0x1fe68000 0x8>;
+		};
+
+		i2c2 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			compatible = "loongson,ls-i2c";
+			reg = <0x1fe70000 0x8>;
+		};
+
+		spi0: spi0 {
+			compatible = "loongson,ls-spi";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x1fe80000 0x10>;
+			spi-flash@0 {
+#address-cells = <1>;
+#size-cells = <1>;
+				compatible = "spi-flash";
+				//memory-map = <0x9fc00000 0x00100000>;
+				spi-max-frequency = <25000000>;
+				reg = <0>;
+			};
+		};
+
+		spi1 {
+			compatible = "loongson,ls-spi";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x1fec0000 0x10>;
+		};
+
+		rtc0 {
+			compatible = "loongson,ls-rtc";
+			reg = <0x1fe64000 0x100>;
+		};
+
+		/* CAN controller nodes:
+		 * If you want to use the "can" function,enable the "can"
+		 * controller by configure general configuration register 0.
+		 */
+		can0 {
+			compatible = "nxp,sja1000";
+			reg = <0x1fe50000 0xff>;
+			interrupt-parent = <&icu>;
+			interrupts = <14>;
+		};
+
+		can1 {
+			compatible = "nxp,sja1000";
+			reg = <0x1fe54000 0xff>;
+			interrupt-parent = <&icu>;
+			interrupts = <15>;
+		};
+
+		pwm0 {
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe5c000 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <25>;
+		};
+		pwm1 {
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe5c010 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <26>;
+		};
+		pwm2 {
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe5c020 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <27>;
+		};
+		pwm3 {
+			compatible = "loongson,ls2k-pwm";
+			reg = <0x1fe5c030 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <28>;
+		};
+
+#if 0
+		/* APB DMA controller nodes:
+		 * apbdma node specify the commom property for dma node.
+		 * the #config-nr must be 2,Used to provide APB sel region
+		 * and APB DMA controler information.
+		 */
+		apbdma: apbdma@1fe10438{
+			compatible = "loongson,ls-apbdma";
+			reg = <0x1fe10438 0x8>;
+			#config-nr = <2>;
+		};
+		/* DMA node should specify the apbdma-sel property using a
+		 * phandle to the controller followed by number of APB sel
+		 * region(max 9) and number of APB DMA controller(max 4).
+		*/
+		dma0: dma@1fe10c00 {
+			compatible = "loongson,ls-apbdma-0";
+			reg = <0x1fe10c00 0x8>;
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma1: dma@1fe10c10 {
+			compatible = "loongson,ls-apbdma-1";
+			reg = <0x1fe10c10 0x8>;
+			apbdma-sel = <&apbdma 0x5 0x1>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma2: dma@1fe10c20 {
+			compatible = "loongson,ls-apbdma-2";
+			reg = <0x1fe10c20 0x8>;
+			apbdma-sel = <&apbdma 0x6 0x2>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		dma3: dma@1fe10c30 {
+			compatible = "loongson,ls-apbdma-3";
+			reg = <0x1fe10c30 0x8>;
+			apbdma-sel = <&apbdma 0x7 0x3>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		/*
+		dma4: dma@1fe10c40 {
+			compatible = "loongson,ls-apbdma-4";
+			apbdma-sel = <&apbdma 0x0 0x0>;
+			reg = <0x1fe10c40 0x8>;
+			#dma-cells = <1>;
+			dma-channels = <1>;
+			dma-requests = <1>;
+		};
+		*/
+		sdio@0x1fe0c000 {
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			compatible = "loongson,ls2k_sdio";
+			reg = <0x1fe0c000 0x1000>;
+			interrupt-parent = <&icu>;
+			interrupts = <39>;
+			interrupt-names = "ls2k_mci_irq";
+
+			dmas = <&dma1 1>;
+			dma-names = "sdio_rw";
+			dma-mask = <0xffffffff 0xffffffff>;
+		};
+		i2s: i2s@0x1fe0d000 {
+			compatible = "loongson,ls-i2s";
+			reg = <0x1fe0d000 0x10>;
+		};
+		audio: audio@0x1fe0d000 {
+			compatible = "loongson,ls-pcm-audio";
+			reg = <0x1fe0d000 0x10>;
+			interrupt-parent = <&icu>;
+			interrupts = <54 55>;
+			interrupt-names = "i2s_irq0", "i2s_irq1";
+
+			dmas = <&dma2 1
+			        &dma3 1>;
+			dma-names = "i2s_play", "i2s_record";
+			dma-mask = <0xffffffff 0xffffffff>;
+		};
+		sound {
+			compatible = "loongson,ls-sound";
+			loongson,i2s-controller = <&i2s>;
+			loongson,audio-codec = <&audio>;
+		};
+		hwmon@0x1fe07000{
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			compatible = "loongson,ls-hwmon";
+			reg = <0x1fe07000 0x1>;
+			max-id = <0>;
+			id = <0>;
+		};
+#endif
+		nand@0x1fe06040{
+			#address-cells = <1>;
+			#size-cells = <1>;
+			compatible = "loongson,ls1a-nand";
+			reg = <0x1fe78000 0x20
+				0x1fd01160 0x4>;
+			number-of-parts = <0x2>;
+
+			partition@0 {
+				label = "kernel_partition";
+				reg = <0x0000000 0x01400000>;
+			};
+
+			partition@0x01400000 {
+				label = "os_partition";
+				reg = <0x01400000 0x0>;
+			};
+		};
+	};
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+		stdout-path = &uart0;
+	};
+};
